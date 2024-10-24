@@ -75,7 +75,9 @@ def generate_mapping_information(num_clients: int) -> tuple[nx.MultiDiGraph, int
 
     node_index_map = dict(enumerate(map_network.nodes(data=True)))
 
-    depot_id = node_index_map[_find_node_index_central_to_network(node_index_map)][0]
+    # depot_id = node_index_map[_find_node_index_central_to_network(node_index_map)][0]
+    depot_id = node_index_map[0][0]
+    
 
     graph_copy = map_network.copy()
     graph_copy.remove_node(depot_id)

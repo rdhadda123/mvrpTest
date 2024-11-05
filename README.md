@@ -1,5 +1,3 @@
-Token: DEV-40d489833621f74207a73f1a5798073449422c30
-
 [![Open in GitHub Codespaces](https://img.shields.io/badge/Open%20in%20GitHub%20Codespaces-333?logo=github)](https://codespaces.new/dwave-examples/mvrp?quickstart=1)
 
 # Multi Vehicle Routing Problem

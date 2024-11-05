@@ -19,7 +19,7 @@ diagonal_length = math.sqrt((x_upper_bound - x_lower_bound)**2 + (y_upper_bound 
 min_separation = factor * diagonal_length
 
 # Randomly generate initial N locations (x, y) in 2D space
-locations = [(random.randint(10, 20), random.randint(-10, 10)) for _ in range(num_locations)]
+locations = [(random.randint(x_lower_bound, x_upper_bound), random.randint(y_lower_bound, y_upper_bound)) for _ in range(num_locations)]
 print(f"Depot is located at: {depot}")
 print(f"These are the current locations: {locations}")
 

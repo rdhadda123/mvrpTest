@@ -1,104 +1,151 @@
-import random
-from dwave.system import LeapHybridCQMSampler
-from dimod import ConstrainedQuadraticModel, Integer, Real
+import numpy as np
+import time
+from scipy.optimize import minimize
+from dwave.system import LeapHybridSampler
+import dimod
+import logging
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
-# Parameters
-num_locations = 7
-depot = (0, 0)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Randomly generate initial N locations (x, y) in 2D space
-locations = [(random.randint(10, 20), random.randint(-10, 10)) for _ in range(num_locations)]
-print(f"Depot is located at: {depot}")
-print(f"These are the current locations: {locations}")
+# Parameter settings
+NUM_UAV = 10
+C = 3e8  # Speed of light, in m/s
+f = 2.4e9  # Operating frequency, in Hz
+wavelength = C / f
+k = 2 * np.pi / wavelength  # Wave number
 
-# Using Hybrid CQM (Constrained Quadratic Model) Solver
-def solve_with_cqm():
-    print("Solving with Hybrid CQM Solver...")
+# Target direction for array factor calculation
+target_angle = np.array([1, 0, 0])  # Example target in the x-direction
 
-    # Initialize the Constrained Quadratic Model
-    cqm = ConstrainedQuadraticModel()
+# Initial random positions (range assumed to be between 0 and 100 meters)
+np.random.seed(0)
+initial_positions = np.random.uniform(-100, 100, (NUM_UAV, 3)).flatten()
 
-    # Variables for each location (x, y coordinates)
-    location_vars = {}
-    for i in range(num_locations):
-        location_vars[i] = {
-            'x': Real(f'x_{i}', lower_bound=10, upper_bound=20),
-            'y': Real(f'y_{i}', lower_bound=-10, upper_bound=10)
-        }
+# Define the array factor calculation function
+def array_factor(positions, target_dir):
+    positions = positions.reshape((NUM_UAV, 3))
+    phases = k * np.dot(positions, target_dir)
+    af = np.abs(np.sum(np.exp(1j * phases)))
+    return af
 
-    # Objective: Minimize the sum of Manhattan distances from each location to the depot
-    objective = 0
-    for i in range(num_locations):
-        x_i, y_i = location_vars[i]['x'], location_vars[i]['y']
+# SciPy optimization function and timing
+def scipy_optimize():
+    def objective(positions):
+        return -array_factor(positions, target_angle)
+    
+    def constraint_z(positions):
+        z_fixed = 50
+        positions = positions.reshape((NUM_UAV, 3))
+        return positions[:, 2] - z_fixed
 
-        # Add auxiliary variables for the absolute value |x_i - depot[0]|, |y_i - depot[1]|
-        abs_x = Real(f'abs_x_{i}', lower_bound=0)
-        abs_y = Real(f'abs_y_{i}', lower_bound=0)
+    constraints = {'type': 'eq', 'fun': constraint_z}
+    start_time = time.time()
+    result = minimize(objective, initial_positions, method='SLSQP', constraints=constraints, options={'disp': True, 'maxiter': 1000})
+    end_time = time.time()
+    scipy_positions = result.x.reshape((NUM_UAV, 3))
+    scipy_af = array_factor(result.x, target_angle)
+    scipy_time = end_time - start_time
+    return scipy_positions, scipy_af, scipy_time
 
-        # Add constraints to ensure abs_x represents the absolute value using two inequalities
-        cqm.add_constraint(abs_x - (x_i - depot[0]) == 0, label=f'abs_x_pos_{i}')
-        cqm.add_constraint(abs_x + (x_i - depot[0]) == 0, label=f'abs_x_neg_{i}')
+def dwave_optimize():
+    # D-Wave parameters
+    num_uav = 10
+    fixed_altitude = 50
+    grid_points = 25
+    min_separation = 10.0  # Minimum separation for dispersion (set higher to encourage spreading)
+    position_scale = 70.0
+    one_hot_scale = 10.0
+    separation_scale = 70.0
+    dispersion_scale = 5.0  # Dispersion penalty scale
 
-        # Add constraints to ensure abs_y represents the absolute value using two inequalities
-        cqm.add_constraint(abs_y - (y_i - depot[1]) == 0, label=f'abs_y_pos_{i}')
-        cqm.add_constraint(abs_y + (y_i - depot[1]) == 0, label=f'abs_y_neg_{i}')
+    x_points = np.linspace(0, 100, grid_points)
+    y_points = np.linspace(0, 100, grid_points)
+    all_positions = [(x, y, fixed_altitude) for x in x_points for y in y_points]
+    phases = [k * np.dot(np.array(pos), target_angle) for pos in all_positions]
 
-        # Add the auxiliary variables to the objective (Manhattan distance)
-        objective += abs_x + abs_y
+    Q = {}
+    
+    def get_var_name(uav_idx, pos_idx):
+        return f"uav{uav_idx}_pos{pos_idx}"
+    
+    for i in range(num_uav):
+        for p1 in range(len(all_positions)):
+            var1 = get_var_name(i, p1)
+            
+            # Diagonal term: prioritize constructive interference (array factor)
+            Q[(var1, var1)] = -2 * position_scale * np.cos(phases[p1])
+            
+            # One-hot constraint to ensure one position per UAV
+            for p2 in range(p1 + 1, len(all_positions)):
+                var2 = get_var_name(i, p2)
+                Q[(var1, var2)] = one_hot_scale
 
-    # Set the objective in the CQM
-    cqm.set_objective(objective)
+            # Add separation constraint and dispersion penalty
+            for j in range(i + 1, num_uav):
+                for p2 in range(len(all_positions)):
+                    var2 = get_var_name(j, p2)
+                    dist = np.linalg.norm(np.array(all_positions[p1])[:2] - np.array(all_positions[p2])[:2])
 
-    # Solve with the Leap Hybrid CQM sampler
-    sampler = LeapHybridCQMSampler()
-    result = sampler.sample_cqm(cqm)
+                    # Separation constraint
+                    if dist < min_separation:
+                        Q[(var1, var2)] = Q.get((var1, var2), 0) + separation_scale * (min_separation - dist)
+                    
+                    # Dispersion penalty for too-close UAVs
+                    if dist < min_separation * 2:  # Double the min separation threshold
+                        Q[(var1, var2)] = Q.get((var1, var2), 0) + dispersion_scale * (min_separation * 2 - dist)
 
-    # Get the best solution
-    best_solution = result.first.sample
+    sampler = LeapHybridSampler()
+    start_time = time.time()
+    response = sampler.sample_qubo(Q)
+    end_time = time.time()
+    dwave_time = end_time - start_time
+    sample = response.first.sample
 
-    optimized_locations = [(best_solution[f'x_{i}'], best_solution[f'y_{i}']) for i in range(num_locations)]
+    dwave_positions = []
+    for i in range(num_uav):
+        for p in range(len(all_positions)):
+            var_name = f"uav{i}_pos{p}"
+            if sample.get(var_name, 0) == 1:
+                dwave_positions.append(all_positions[p])
+                break
+    
+    dwave_positions = np.array(dwave_positions)
+    dwave_af = array_factor(dwave_positions.flatten(), target_angle)
+    return dwave_positions, dwave_af, dwave_time
 
-    print("\nBest solution with CQM within the rectangular box:")
-    for i, (x, y) in enumerate(optimized_locations):
-        print(f"Location {i}: Coordinates: (x_{i} = {x}, y_{i} = {y})")
 
-        # Plotting the results
-    plot_solution(locations, optimized_locations, depot)
+# Run both optimizations and display results
+scipy_positions, scipy_af, scipy_time = scipy_optimize()
+dwave_positions, dwave_af, dwave_time = dwave_optimize()
 
-def plot_solution(initial_locations, optimized_locations, depot):
-    # Create a figure and axis
-    fig, ax = plt.subplots()
+print("SciPy Optimization Results:")
+print(f"Optimized Array Factor: {scipy_af}")
+print(f"Execution Time: {scipy_time:.4f} seconds")
+print("Optimized Positions (meters):")
+for i, pos in enumerate(scipy_positions):
+    print(f"UAV {i+1}: x={pos[0]:.2f}, y={pos[1]:.2f}, z={pos[2]:.2f}")
 
-    # Plot the initial locations
-    x_initial, y_initial = zip(*initial_locations)
-    ax.scatter(x_initial, y_initial, color='blue', label='Initial Locations', marker='o')
+print("\nD-Wave Optimization Results:")
+print(f"Optimized Array Factor: {dwave_af}")
+print(f"Execution Time: {dwave_time:.4f} seconds")
+print("Optimized Positions (meters):")
+for i, pos in enumerate(dwave_positions):
+    print(f"UAV {i+1}: x={pos[0]:.2f}, y={pos[1]:.2f}, z={pos[2]:.2f}")
 
-    # Plot the optimized locations
-    x_optimized, y_optimized = zip(*optimized_locations)
-    ax.scatter(x_optimized, y_optimized, color='red', label='Optimized Locations', marker='x')
-
-    # Plot the depot
-    ax.scatter(*depot, color='green', label='Depot', marker='s')
-
-    # Plot the rectangular boundary box
-    box_x = [10, 20, 20, 10, 10]
-    box_y = [-10, -10, 10, 10, -10]
-    ax.plot(box_x, box_y, color='black', linestyle='--', label='Rectangular Boundary Box')
-
-    # Set axis limits
-    ax.set_xlim(-1, 25)
-    ax.set_ylim(-15, 15)
-
-    # Add labels and title
-    ax.set_xlabel('X Coordinate')
-    ax.set_ylabel('Y Coordinate')
-    ax.set_title('Optimization of Locations within a Rectangular Box')
-    ax.legend()
-
-    # Show the plot
-    plt.grid(True)
+# Visualization of results
+def visualize_positions(positions, title):
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(positions[:, 0], positions[:, 1], positions[:, 2], marker='o', s=100)
+    ax.set_xlabel('X (meters)')
+    ax.set_ylabel('Y (meters)')
+    ax.set_zlabel('Z (meters)')
+    ax.set_title(title)
     plt.show()
 
-# Run the CQM case
-solve_with_cqm()
+visualize_positions(scipy_positions, "SciPy Optimized UAV Positions")
+visualize_positions(dwave_positions, "D-Wave Optimized UAV Positions")

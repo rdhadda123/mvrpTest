@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Parameter settings
-NUM_UAV = 10
+NUM_UAV = 25
 C = 3e8  # Speed of light, in m/s
 f = 2.4e9  # Operating frequency, in Hz
 wavelength = C / f
@@ -24,6 +24,7 @@ target_angle = np.array([1, 0, 0])  # Example target in the x-direction
 # Initial random positions (range assumed to be between 0 and 100 meters)
 np.random.seed(0)
 initial_positions = np.random.uniform(-100, 100, (NUM_UAV, 3)).flatten()
+
 
 # Define the array factor calculation function
 def array_factor(positions, target_dir):
@@ -53,13 +54,13 @@ def scipy_optimize():
 
 def dwave_optimize():
     # D-Wave parameters
-    num_uav = 10
+    num_uav = NUM_UAV
     fixed_altitude = 50
     grid_points = 25
-    min_separation = 10.0  # Minimum separation for dispersion (set higher to encourage spreading)
+    min_separation = 5.0  # Minimum separation for dispersion (set higher to encourage spreading)
     position_scale = 70.0
     one_hot_scale = 10.0
-    separation_scale = 70.0
+    separation_scale = 60.0
     dispersion_scale = 5.0  # Dispersion penalty scale
 
     x_points = np.linspace(0, 100, grid_points)
@@ -107,11 +108,15 @@ def dwave_optimize():
 
     dwave_positions = []
     for i in range(num_uav):
+        assigned = False
         for p in range(len(all_positions)):
             var_name = f"uav{i}_pos{p}"
             if sample.get(var_name, 0) == 1:
                 dwave_positions.append(all_positions[p])
+                assigned = True
                 break
+        if not assigned:
+            logger.warning(f"UAV {i} was not assigned a valid position.")
     
     dwave_positions = np.array(dwave_positions)
     dwave_af = array_factor(dwave_positions.flatten(), target_angle)

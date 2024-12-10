@@ -1,6 +1,7 @@
 import numpy as np
 from dimod import ConstrainedQuadraticModel, Binary
 from dwave.system import LeapHybridCQMSampler
+import time
 
 def shortest_path_cqm(adj_matrix, start_idx, end_idx):
     n = len(adj_matrix)
@@ -93,7 +94,10 @@ end_idx = node_labels.index(end_node)
 cqm = shortest_path_cqm(adj_matrix, start_idx, end_idx)
 
 sampler = LeapHybridCQMSampler()
+start = time.time()
 results = sampler.sample_cqm(cqm, label="Shortest Path CQM")
+end = time.time()
+print(f"Execution Time: ", end - start, " seconds")
 
 feasible = results.filter(lambda d: d.is_feasible)
 if feasible:

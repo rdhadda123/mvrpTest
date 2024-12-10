@@ -1,5 +1,5 @@
 import numpy as np
-
+import time
 
 def nash_bargaining_shortest_distance_path(adj_matrix, node_labels, start_node, end_node):
     n = len(adj_matrix)
@@ -64,5 +64,8 @@ adj_matrix = [
 
 start_node = 'A'
 end_node = 'I'
+start = time.time()
 shortest_path = nash_bargaining_shortest_distance_path(adj_matrix, node_labels, start_node, end_node)
+end = time.time()
+print(f"Classical FW algo took", end - start, "seconds")
 print("Shortest Path:", shortest_path)

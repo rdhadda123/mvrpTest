@@ -1,4 +1,5 @@
 import numpy as np
+import time
 from scipy.optimize import minimize
 
 # Parameter settings
@@ -46,8 +47,11 @@ constraints = ({
 })
 
 # Optimization
+start = time.time()
 result = minimize(objective, initial_positions, method='SLSQP', constraints=constraints,
                   options={'disp': True, 'maxiter': 1000})
+end = time.time()
+print(f"took", {end - start}, "seconds")
 #result2 = Dwave(objective, initial_positions,condio)
 # Display results
 optimized_positions = result.x.reshape((NUM_UAV, 3))

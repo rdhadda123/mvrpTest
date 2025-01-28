@@ -8,20 +8,18 @@ from shortestpath import solve_cqm, solve_nash
 
 app = Flask(__name__)
 
-# Parameters
 START_POS = (0.0, 0.0, 0.0)
 END_POS = (100.0, 100.0, 0.0)
 
 @app.route('/')
 def index():
-    # Initial UI
     html_template = """
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>UAV Shortest Path</title>
+        <title>UAV Optimal Path</title>
         <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
         <style>
             body {
@@ -31,7 +29,7 @@ def index():
                 background-color: #000;
                 color: #fff;
                 height: 100vh;
-                overflow: hidden;
+                overflow: hidden; /* We keep this to hide overflow on the main body */
             }
             .sidebar {
                 width: 25%;
@@ -43,6 +41,8 @@ def index():
                 align-items: flex-start;
                 height: 100vh;
                 box-sizing: border-box;
+                /* ADD THIS to make the sidebar scrollable if content is tall */
+                overflow-y: auto;
             }
             .sidebar h2 {
                 font-size: 1.5em;
@@ -132,11 +132,24 @@ def index():
     <body>
         <div class="sidebar">
             <h2>UAV Shortest Path</h2>
+
+            <!-- 1) Choose Random or Manual first -->
+            <div class="input-group">
+                <label for="positionMode">Select Mode</label>
+                <select id="positionMode" onchange="createUAVInputs()">
+                    <option value="manual" selected>Manual</option>
+                    <option value="random">Random</option>
+                </select>
+            </div>
+
+            <!-- 2) Choose number of UAVs after mode is chosen -->
             <div class="input-group">
                 <label for="drones">Number of UAVs</label>
                 <input type="number" id="drones" name="drones" min="1" max="10" placeholder="Enter number of UAVs" onchange="createUAVInputs()">
             </div>
+
             <div id="uav-inputs"></div>
+
             <div class="input-group">
                 <label for="solver_select">Solver to Display</label>
                 <select id="solver_select">
@@ -146,6 +159,7 @@ def index():
             </div>
             <button class="submit-btn" onclick="updateMap()">Optimize</button>
         </div>
+
         <div class="map-container">
             <div class="tabs">
                 <button class="tab-btn active" onclick="showGraph()">Graph</button>
@@ -183,11 +197,26 @@ def index():
                 document.querySelector('.tabs button:nth-child(2)').classList.add('active');
             }
 
+            /**
+             * createUAVInputs() is called whenever the user changes the
+             * mode (manual/random) or the number of drones.
+             * It will update the UI to show/hide input fields accordingly.
+             */
             function createUAVInputs() {
-                const numDrones = document.getElementById("drones").value;
                 const container = document.getElementById("uav-inputs");
+                const mode = document.getElementById("positionMode").value;
+                const numDrones = parseInt(document.getElementById("drones").value);
+
+                // Clear whatever was in that container
                 container.innerHTML = "";
-                if (numDrones >= 1 && numDrones <= 10) {
+
+                // Validate number
+                if (isNaN(numDrones) || numDrones < 1 || numDrones > 10) {
+                    return;  // If invalid, do nothing else
+                }
+
+                // If manual, build the input fields
+                if (mode === "manual") {
                     for (let i = 0; i < numDrones; i++) {
                         const label = String.fromCharCode('A'.charCodeAt(0) + i);
                         container.innerHTML += `
@@ -200,31 +229,56 @@ def index():
                             </div>
                         `;
                     }
+                } 
+                // If random, just show a note (optional)
+                else {
+                    container.innerHTML = "<p>Random positions will be used.</p>";
                 }
             }
 
             function updateMap() {
-                const numDrones = document.getElementById("drones").value;
+                const mode = document.getElementById("positionMode").value;
+                const numDrones = parseInt(document.getElementById("drones").value);
                 const solverChoice = document.getElementById("solver_select").value;
 
-                if (numDrones < 1 || numDrones > 10) {
-                    alert("Please enter a number between 1 and 10.");
+                if (isNaN(numDrones) || numDrones < 1 || numDrones > 10) {
+                    alert("Please enter a valid number of UAVs between 1 and 10.");
                     return;
                 }
 
                 let uavPositions = [];
-                for (let i = 0; i < numDrones; i++) {
-                    let xVal = parseFloat(document.getElementById(`uav${i}_x`).value);
-                    let yVal = parseFloat(document.getElementById(`uav${i}_y`).value);
-                    if (isNaN(xVal) || isNaN(yVal) || xVal < 0 || xVal > 100 || yVal < 0 || yVal > 100) {
-                        alert(`Please enter valid coordinates (0-100) for UAV ${String.fromCharCode('A'.charCodeAt(0) + i)}`);
-                        return;
+
+                if (mode === "random") {
+                    // Random: generate random coords in [0,100)
+                    for (let i = 0; i < numDrones; i++) {
+                        const xVal = Math.random() * 100;
+                        const yVal = Math.random() * 100;
+                        uavPositions.push({x: xVal, y: yVal});
                     }
-                    uavPositions.push({x: xVal, y: yVal});
+                } else {
+                    // Manual: read from input fields
+                    for (let i = 0; i < numDrones; i++) {
+                        const xVal = parseFloat(document.getElementById(`uav${i}_x`).value);
+                        const yVal = parseFloat(document.getElementById(`uav${i}_y`).value);
+
+                        // Validate each coordinate
+                        if (
+                            isNaN(xVal) || isNaN(yVal) ||
+                            xVal < 0 || xVal > 100 ||
+                            yVal < 0 || yVal > 100
+                        ) {
+                            const label = String.fromCharCode('A'.charCodeAt(0) + i);
+                            alert(`Please enter valid coordinates (0-100) for UAV ${label}`);
+                            return;
+                        }
+                        uavPositions.push({x: xVal, y: yVal});
+                    }
                 }
 
+                // Show a loading message
                 document.getElementById("graph-container").innerHTML = "Loading...";
 
+                // Send data to backend
                 fetch(`/optimize?num_drones=${numDrones}&show_solver=${solverChoice}`, {
                     method: 'POST',
                     headers: {'Content-Type':'application/json'},
@@ -232,7 +286,7 @@ def index():
                 })
                 .then(response => response.json())
                 .then(data => {
-                    // Depending on solverChoice, pick edges from either cqm or nash
+                    // Depending on solverChoice, pick path edges from cqm or nash
                     let pathEdges = data.show_solver === 'cqm' ? data.cqm_path_edges : data.nash_path_edges;
 
                     const nodes = data.positions;
@@ -240,6 +294,7 @@ def index():
                     const ys = nodes.map(n => n[1]);
                     const zs = nodes.map(n => n[2]);
 
+                    // Plot nodes
                     const traceNodes = {
                         type: 'scatter3d',
                         mode: 'markers+text',
@@ -248,52 +303,64 @@ def index():
                         z: zs,
                         text: data.node_labels,
                         textposition: "top center",
-                        marker: {size:5, color:'cyan'},
-                        name:'Nodes',
+                        marker: { size: 5, color: 'cyan' },
                         showlegend: false
                     };
 
+                    // Plot edges for the chosen path
                     let pathX = [];
                     let pathY = [];
                     let pathZ = [];
-                    for (let i=0; i<pathEdges.length; i++) {
-                        const e = pathEdges[i];
+                    for (let e of pathEdges) {
                         pathX.push(e[0][0], e[1][0], null);
                         pathY.push(e[0][1], e[1][1], null);
                         pathZ.push(e[0][2], e[1][2], null);
                     }
-
                     const traceEdges = {
-                        type:'scatter3d',
-                        mode:'lines',
+                        type: 'scatter3d',
+                        mode: 'lines',
                         x: pathX,
                         y: pathY,
                         z: pathZ,
-                        line:{color:'red', width:4},
-                        name:'Shortest Path',
+                        line: { color: 'red', width: 4 },
                         showlegend: false
                     };
 
                     const layout = {
                         width: 1000,
                         height: 850,
-                        margin: {l:0, r:0, b:0, t:0},
+                        margin: { l: 0, r: 0, b: 0, t: 0 },
                         showlegend: false,
                         scene: {
                             bgcolor: "#000000",
-                            xaxis: { showbackground:false, color:"white" },
-                            yaxis: { showbackground:false, color:"white" },
-                            zaxis: { showbackground:false, color:"white" }
+                            xaxis: { showbackground: false, color: "white" },
+                            yaxis: { showbackground: false, color: "white" },
+                            zaxis: { showbackground: false, color: "white" }
                         }
                     };
 
                     Plotly.newPlot('graph-container', [traceNodes, traceEdges], layout);
 
+                    // Update results table
                     const resultsBody = document.getElementById("results-body");
                     resultsBody.innerHTML = `
-                        <tr><td>D-Wave (CQM)</td><td>${data.cqm_path}</td><td>${data.cqm_cost.toFixed(4)}</td><td>${data.cqm_time.toFixed(4)} seconds</td></tr>
-                        <tr><td>Nash Bargaining</td><td>${data.nb_path}</td><td>${data.nb_cost.toFixed(4)}</td><td>${data.nb_time.toFixed(4)} seconds</td></tr>
+                        <tr>
+                            <td>D-Wave (CQM)</td>
+                            <td>${data.cqm_path}</td>
+                            <td>${data.cqm_cost.toFixed(4)}</td>
+                            <td>${data.cqm_time.toFixed(4)} s</td>
+                        </tr>
+                        <tr>
+                            <td>Nash Bargaining</td>
+                            <td>${data.nb_path}</td>
+                            <td>${data.nb_cost.toFixed(4)}</td>
+                            <td>${data.nb_time.toFixed(4)} s</td>
+                        </tr>
                     `;
+                })
+                .catch(err => {
+                    console.error(err);
+                    document.getElementById("graph-container").innerHTML = "Error occurred.";
                 });
             }
         </script>
@@ -302,42 +369,46 @@ def index():
     """
     return render_template_string(html_template)
 
-@app.route('/optimize', methods=['POST','GET'])
+@app.route('/optimize', methods=['POST', 'GET'])
 def optimize():
     if request.method == 'POST':
         data = request.get_json()
-        uav_positions = data['uavs']
+        uav_positions = data.get('uavs', [])
     else:
         uav_positions = []
+
     num_drones = int(request.args.get('num_drones', 1))
     show_solver = request.args.get('show_solver', 'cqm')  # 'cqm' or 'nash'
 
-    node_labels = ['S'] + [chr(ord('A')+i) for i in range(num_drones)] + ['END']
-    positions = [(0.0,0.0,0.0)] + [(u['x'], u['y'], 50.0) for u in uav_positions] + [(100.0,100.0,0.0)]
+    node_labels = ['S'] + [chr(ord('A') + i) for i in range(num_drones)] + ['END']
+    positions = [(0.0, 0.0, 0.0)] + [(u['x'], u['y'], 50.0) for u in uav_positions] + [(100.0, 100.0, 0.0)]
 
     total_nodes = len(positions)
-    adj_matrix = [[float('inf')]*total_nodes for _ in range(total_nodes)]
+    adj_matrix = [[float('inf')] * total_nodes for _ in range(total_nodes)]
     for i in range(total_nodes):
         for j in range(total_nodes):
             if i != j:
                 (x1, y1, z1) = positions[i]
                 (x2, y2, z2) = positions[j]
-                dist = math.sqrt((x1 - x2)**2 + (y1 - y2)**2 + (z1 - z2)**2)
+                dist = math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2 + (z1 - z2) ** 2)
                 adj_matrix[i][j] = dist
             else:
                 adj_matrix[i][j] = 0.0
 
     start_idx = 0
     end_idx = total_nodes - 1
-
-    # Force no direct start-to-end edge
+    # Disallow direct start-to-end to force going through UAVs
     adj_matrix[start_idx][end_idx] = float('inf')
 
-    # Solve CQM (D-Wave)
-    cqm_path_labels, cqm_cost, cqm_time, cqm_path_edges = solve_cqm(adj_matrix, start_idx, end_idx, node_labels, positions)
+    # Solve with D-Wave CQM
+    cqm_path_labels, cqm_cost, cqm_time, cqm_path_edges = solve_cqm(
+        adj_matrix, start_idx, end_idx, node_labels, positions
+    )
 
-    # Solve Nash Bargaining
-    nb_path_labels, nb_cost, nb_time, nb_path_edges = solve_nash(adj_matrix, node_labels, positions)
+    # Solve with Nash Bargaining
+    nb_path_labels, nb_cost, nb_time, nb_path_edges = solve_nash(
+        adj_matrix, node_labels, positions
+    )
 
     response = {
         'cqm_path': cqm_path_labels,
